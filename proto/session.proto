@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+package ensemble;
+
+// ---------------------------------------------------------------------------
+// Ensemble Session Service
+//
+// This is the CONTROL PLANE of the system: strictly request/reply operations
+// that need an immediate, authoritative answer (Unit 2 - Remote Procedure Call).
+//
+// Anything that is an *event* broadcast to many nodes (roster changes, tempo
+// changes, WebRTC signalling, telemetry) is deliberately NOT here -- that
+// travels over MQTT publish/subscribe (Unit 2 - Message-Oriented Communication).
+//
+// The split is the point: RPC for "tell me the answer now", MOM for "tell
+// everyone when it happens".
+// ---------------------------------------------------------------------------
+service SessionService {
+  // --- Session lifecycle -------------------------------------------------
+  rpc CreateSession      (CreateSessionRequest)      returns (SessionInfo);
+  rpc JoinSession        (JoinSessionRequest)        returns (JoinSessionReply);
+  rpc LeaveSession       (LeaveSessionRequest)       returns (Ack);
+  rpc ListParticipants   (SessionRef)                returns (ParticipantList);
+
+  // --- Musical control ---------------------------------------------------
+  rpc SetTempo           (SetTempoRequest)           returns (Ack);
+  rpc ArmTrack           (ArmTrackRequest)           returns (Ack);
+  rpc SetTransport       (SetTransportRequest)       returns (TransportState);
+
+  // --- Clock synchronisation (Cristian's algorithm) ----------------------
+  // The client stamps T0, calls this, stamps T1 on return, and estimates
+  //     offset = server_time_ms + (T1-T0)/2 - T1
+  // The server echoes the client's T0 so the client can pair up replies and
+  // so we can log one-way asymmetry.
+  rpc GetServerTime      (TimeRequest)               returns (TimeReply);
+
+  // --- Fault tolerance ---------------------------------------------------
+  // Peers heartbeat here. The server marks silent peers dead and, if the
+  // dead peer was the timing master, promotes a successor and announces it
+  // on MQTT topic session/{id}/master.
+  rpc Heartbeat          (HeartbeatRequest)          returns (HeartbeatReply);
+}
+
+// --- messages --------------------------------------------------------------
+
+message CreateSessionRequest {
+  string display_name = 1;   // human label for the session, e.g. "Jam A"
+  double bpm          = 2;   // initial tempo; 0 => default 100
+  uint32 beats_per_bar= 3;   // 0 => default 4
+}
+
+message JoinSessionRequest {
+  string session_id   = 1;
+  string peer_name    = 2;   // human label for the musician
+  string instrument   = 3;   // free text, shown in the roster
+}
+
+message JoinSessionReply {
+  string      peer_id  = 1;  // server-assigned identifier for this node
+  SessionInfo session  = 2;
+  // Peers already present. The joiner is responsible for initiating a WebRTC
+  // offer to each of these (the "polite/impolite" rule: newcomer offers).
+  repeated Participant existing_peers = 3;
+  string mqtt_ws_url   = 4;  // where to reach the broker from a browser
+}
+
+message LeaveSessionRequest { string session_id = 1; string peer_id = 2; }
+message SessionRef          { string session_id = 1; }
+
+message SessionInfo {
+  string   session_id     = 1;
+  string   display_name   = 2;
+  double   bpm            = 3;
+  uint32   beats_per_bar  = 4;
+  string   master_peer_id = 5;  // current timing master
+  double   created_at_ms  = 6;
+  TransportState transport= 7;
+}
+
+message Participant {
+  string peer_id     = 1;
+  string peer_name   = 2;
+  string instrument  = 3;
+  bool   armed       = 4;   // is this node contributing audio
+  bool   is_master   = 5;
+  double joined_at_ms= 6;
+}
+
+message ParticipantList { repeated Participant participants = 1; }
+
+message SetTempoRequest  { string session_id = 1; string peer_id = 2; double bpm = 3; }
+message ArmTrackRequest  { string session_id = 1; string peer_id = 2; bool armed = 3; }
+
+message SetTransportRequest {
+  string session_id = 1;
+  string peer_id    = 2;
+  bool   playing    = 3;
+}
+
+// The shared musical timeline is expressed as a FORMULA, not a tick stream:
+//   beat(t) = anchor_beat + (t - anchor_time_ms) * bpm / 60000
+// Every node can therefore compute the position of every future beat locally,
+// which is why the ensemble keeps playing correctly even if the timing master
+// disappears mid-session.
+message TransportState {
+  bool   playing        = 1;
+  double anchor_beat    = 2;  // beat number at the anchor instant
+  double anchor_time_ms = 3;  // SERVER-clock time of that beat
+  double bpm            = 4;
+}
+
+message TimeRequest { double client_send_ms = 1; }
+message TimeReply   {
+  double client_send_ms = 1;  // echoed back
+  double server_time_ms = 2;  // instant the server handled the call
+}
+
+message HeartbeatRequest { string session_id = 1; string peer_id = 2; }
+message HeartbeatReply   { bool alive = 1; string master_peer_id = 2; }
+
+message Ack { bool ok = 1; string message = 2; }

@@ -1,0 +1,19 @@
+{
+  "name": "ds-ensemble-sync",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Distributed Latency-Compensated Ensemble Synchronization - DS FA-1 mini project",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.12.5",
+    "@grpc/proto-loader": "^0.7.13",
+    "aedes": "^0.51.3",
+    "aedes-server-factory": "^0.2.1",
+    "mqtt": "^5.10.3",
+    "ws": "^8.18.0"
+  }
+}

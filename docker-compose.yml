@@ -1,0 +1,72 @@
+# ---------------------------------------------------------------------------
+# Two containers, two roles.
+#
+#   docker compose up --build      then open http://localhost:8080
+#
+# This is the same system as `npm start`, with one difference that is worth
+# demonstrating: the MQTT broker is now real Mosquitto in its own container
+# rather than the embedded Aedes broker in the server process.
+#
+# Nothing in the peer code changes, and no peer can tell the difference. That
+# is the point -- MQTT is an open protocol, so any conforming broker is a
+# drop-in replacement. It is a concrete demonstration of the OPENNESS goal
+# from Unit 1: the system is defined by its interfaces, not its
+# implementations.
+# ---------------------------------------------------------------------------
+
+services:
+
+  # --- Message-oriented middleware -----------------------------------------
+  broker:
+    image: eclipse-mosquitto:2
+    container_name: ensemble-broker
+    ports:
+      # 1883 for the server and any native peer; 9001 for browsers, which
+      # cannot open raw TCP sockets and must use MQTT over WebSockets.
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto/mosquitto.docker.conf:/mosquitto/config/mosquitto.conf:ro
+      # Named volume so retained messages -- the current tempo, roster and
+      # timing master -- survive a broker restart.
+      - broker-data:/mosquitto/data
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "healthcheck", "-W", "3"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  # --- Session server: gRPC control plane + client + signalling relay -------
+  server:
+    build: .
+    container_name: ensemble-server
+    ports:
+      - "8080:8080"    # web client + gRPC/JSON gateway
+      - "50051:50051"  # native gRPC, so grpcurl works from the host
+    environment:
+      EMBEDDED_BROKER: "0"
+      # Resolved by Docker's internal DNS to the broker container. The server
+      # never learns an IP address -- it is given a name, which is precisely
+      # the naming/addressing distinction the client UI illustrates.
+      MQTT_HOST: broker
+      MQTT_TCP_PORT: "1883"
+      MQTT_WS_PORT: "9001"
+    depends_on:
+      broker:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  broker-data:
+
+# ---------------------------------------------------------------------------
+# A note on what is NOT containerised: the peers.
+#
+# Peers are browsers, and the audio mesh between them is peer-to-peer. Putting
+# them in containers would add a network hop and a NAT boundary between
+# musicians, which is the opposite of what this system is trying to achieve.
+# The control plane is infrastructure and benefits from containerisation; the
+# data plane is deliberately left alone.
+# ---------------------------------------------------------------------------

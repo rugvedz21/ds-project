@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ensemble Sync — Distributed Latency Compensation</title>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#151b24; --panel2:#1c2430; --line:#2a3441;
+    --fg:#e6edf3; --dim:#8b98a8; --accent:#4dd4ac; --accent2:#7aa2f7;
+    --warn:#f7b955; --bad:#f7768e; --good:#4dd4ac;
+    --mono:'Cascadia Code',Consolas,'SF Mono',Menlo,monospace;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg);
+    font:14px/1.5 'Segoe UI',system-ui,sans-serif;
+  }
+  header {
+    padding:14px 22px; border-bottom:1px solid var(--line);
+    display:flex; align-items:baseline; gap:16px; flex-wrap:wrap;
+    background:linear-gradient(180deg,#141b25,#0d1117);
+  }
+  header h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
+  header .sub { color:var(--dim); font-size:12px; }
+  .badge {
+    font:11px/1 var(--mono); padding:4px 8px; border-radius:999px;
+    border:1px solid var(--line); color:var(--dim); background:var(--panel2);
+  }
+  .badge.on { color:var(--accent); border-color:#2c5c4d; }
+  .badge.off{ color:var(--bad);    border-color:#5c2c34; }
+
+  main { padding:18px 22px; display:grid; gap:16px;
+         grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); align-items:start; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .card > h2 {
+    margin:0; padding:10px 14px; font-size:12px; text-transform:uppercase;
+    letter-spacing:.09em; color:var(--dim); border-bottom:1px solid var(--line);
+    background:var(--panel2); font-weight:600;
+  }
+  .card > .body { padding:14px; }
+  .card.wide { grid-column:1/-1; }
+
+  label { display:block; font-size:11px; color:var(--dim); margin-bottom:4px;
+          text-transform:uppercase; letter-spacing:.06em; }
+  input[type=text], input[type=number] {
+    width:100%; padding:8px 10px; border-radius:6px; border:1px solid var(--line);
+    background:var(--bg); color:var(--fg); font-family:var(--mono); font-size:13px;
+  }
+  input[type=range] { width:100%; accent-color:var(--accent); }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
+  .row > * { flex:1 1 120px; }
+
+  button {
+    padding:9px 14px; border-radius:6px; border:1px solid var(--line);
+    background:var(--panel2); color:var(--fg); cursor:pointer; font-size:13px;
+    font-weight:500; transition:.12s;
+  }
+  button:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  button.primary { background:var(--accent); color:#08211a; border-color:var(--accent); font-weight:600; }
+  button.primary:hover { filter:brightness(1.1); color:#08211a; }
+  button.danger  { border-color:#5c2c34; color:var(--bad); }
+  button.active  { background:#173a30; border-color:var(--accent); color:var(--accent); }
+
+  table { width:100%; border-collapse:collapse; font-family:var(--mono); font-size:12px; }
+  th { text-align:left; color:var(--dim); font-weight:500; padding:6px 8px;
+       border-bottom:1px solid var(--line); font-size:11px; text-transform:uppercase; }
+  td { padding:7px 8px; border-bottom:1px solid #1e2530; }
+  tr:last-child td { border-bottom:none; }
+  .num { text-align:right; }
+
+  .stat { display:flex; justify-content:space-between; align-items:baseline;
+          padding:7px 0; border-bottom:1px solid #1e2530; }
+  .stat:last-child { border-bottom:none; }
+  .stat .k { color:var(--dim); font-size:12px; }
+  .stat .v { font-family:var(--mono); font-size:15px; font-weight:600; }
+
+  .beat-strip { display:flex; gap:6px; margin:10px 0 4px; }
+  .beat-dot { flex:1; height:26px; border-radius:5px; background:var(--panel2);
+              border:1px solid var(--line); transition:.06s;
+              display:flex; align-items:center; justify-content:center;
+              font:11px var(--mono); color:var(--dim); }
+  .beat-dot.hit  { background:var(--accent); border-color:var(--accent); color:#08211a; }
+  .beat-dot.down { background:var(--accent2); border-color:var(--accent2); color:#0b1220; }
+
+  .log { font-family:var(--mono); font-size:11.5px; max-height:190px; overflow-y:auto;
+         background:var(--bg); border-radius:6px; padding:8px; }
+  .log div { padding:2px 0; border-bottom:1px solid #171d26; color:var(--dim); }
+  .log div:last-child { border-bottom:none; }
+  .log .tag { color:var(--accent2); }
+  .log .warn { color:var(--warn); }
+  .log .bad  { color:var(--bad); }
+
+  .hint { color:var(--dim); font-size:11.5px; line-height:1.5; margin:8px 0 0; }
+  .kbd { font-family:var(--mono); background:var(--panel2); padding:1px 5px;
+         border-radius:3px; border:1px solid var(--line); font-size:11px; }
+  #joinView { max-width:520px; margin:60px auto; }
+  .hidden { display:none !important; }
+  .sep { height:1px; background:var(--line); margin:14px 0; }
+  .peer-ctl { padding:10px 0; border-bottom:1px solid #1e2530; }
+  .peer-ctl:last-child { border-bottom:none; }
+  .peer-ctl .name { display:flex; justify-content:space-between; margin-bottom:6px; font-size:13px; }
+  .peer-ctl .name b { font-weight:600; }
+  .peer-ctl .name span { font-family:var(--mono); font-size:11px; color:var(--dim); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Distributed Latency-Compensated Ensemble Synchronisation</h1>
+  <span class="sub">gRPC · MQTT · WebRTC · Cristian clock sync</span>
+  <span style="flex:1"></span>
+  <span class="badge" id="bRpc">gRPC —</span>
+  <span class="badge" id="bMqtt">MQTT —</span>
+  <span class="badge" id="bMesh">mesh —</span>
+  <span class="badge" id="bClock">clock —</span>
+</header>
+
+<!-- ===================== JOIN ===================== -->
+<div id="joinView">
+  <div class="card">
+    <h2>Join an ensemble</h2>
+    <div class="body">
+      <div class="row">
+        <div style="flex:2 1 200px">
+          <label for="fName">Your name</label>
+          <input type="text" id="fName" value="Musician" />
+        </div>
+        <div>
+          <label for="fInst">Instrument</label>
+          <input type="text" id="fInst" value="click" />
+        </div>
+      </div>
+      <div class="sep"></div>
+      <div class="row">
+        <div style="flex:2 1 200px">
+          <label for="fSession">Session ID</label>
+          <input type="text" id="fSession" placeholder="paste an ID to join" />
+        </div>
+        <div style="flex:0 0 auto">
+          <label>&nbsp;</label>
+          <button id="btnJoin">Join</button>
+        </div>
+      </div>
+      <div class="sep"></div>
+      <div class="row">
+        <div>
+          <label for="fBpm">Tempo (BPM)</label>
+          <input type="number" id="fBpm" value="100" min="20" max="300" />
+        </div>
+        <div>
+          <label for="fBar">Beats / bar</label>
+          <input type="number" id="fBar" value="4" min="1" max="16" />
+        </div>
+        <div style="flex:0 0 auto">
+          <label>&nbsp;</label>
+          <button class="primary" id="btnCreate">Create new session</button>
+        </div>
+      </div>
+      <p class="hint">
+        Create a session on the first machine, then copy its Session ID into the
+        second machine (or a second browser tab) and press Join. Audio starts
+        only after you click — browsers require a user gesture before they will
+        produce sound.
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== MAIN ===================== -->
+<main id="mainView" class="hidden">
+
+  <div class="card">
+    <h2>Session</h2>
+    <div class="body">
+      <div class="stat"><span class="k">Session ID</span><span class="v" id="sSid" style="font-size:12px">—</span></div>
+      <div class="stat"><span class="k">You</span><span class="v" id="sMe" style="font-size:12px">—</span></div>
+      <div class="stat"><span class="k">Timing master</span><span class="v" id="sMaster" style="font-size:12px">—</span></div>
+      <div class="sep"></div>
+      <div class="row">
+        <div style="flex:2 1 160px">
+          <label for="fTempo">Tempo — <span id="lTempo">100</span> BPM</label>
+          <input type="range" id="fTempo" min="40" max="220" value="100" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="primary" id="btnPlay">Start</button>
+        <button id="btnArm">Arm my track</button>
+        <button class="danger" id="btnLeave">Leave</button>
+      </div>
+      <p class="hint">
+        Tempo changes travel over MQTT (<span class="kbd">session/{id}/tempo</span>,
+        QoS&nbsp;1, retained) — every node hears them, and a node that joins later
+        is handed the current value immediately.
+      </p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Shared timeline</h2>
+    <div class="body">
+      <div class="beat-strip" id="beatStrip"></div>
+      <div class="stat"><span class="k">Current beat</span><span class="v" id="sBeat">—</span></div>
+      <div class="stat"><span class="k">Bar</span><span class="v" id="sBar">—</span></div>
+      <div class="stat"><span class="k">Clock offset vs server</span><span class="v" id="sOffset">—</span></div>
+      <div class="stat"><span class="k">Sync uncertainty</span><span class="v" id="sUncert">—</span></div>
+      <p class="hint">
+        Beat position is computed locally from an anchor
+        <span class="kbd">(beat, time, bpm)</span> on the <em>server</em> clock, and
+        Cristian's algorithm maps that onto this machine's clock. No per-beat
+        message is ever sent.
+      </p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Latency compensation</h2>
+    <div class="body">
+      <div class="row">
+        <button class="active" id="btnComp" style="flex:1 1 100%">Compensation: ON</button>
+      </div>
+      <div class="stat" style="margin-top:8px">
+        <span class="k">Common deadline D</span><span class="v" id="sD">0 ms</span>
+      </div>
+      <div class="stat">
+        <span class="k">My monitor delay</span><span class="v" id="sMon">0 ms</span>
+      </div>
+      <p class="hint">
+        <b>D</b> is the worst one-way delay anywhere in the session. Every node
+        delays its own monitoring by <b>D</b>, and delays peer <i>j</i> by
+        <b>D&nbsp;−&nbsp;d<sub>j</sub></b>. Every sound then lands exactly
+        <b>D</b> after the beat it belongs to, on every machine — the same
+        arrangement of the music for everyone.
+      </p>
+    </div>
+  </div>
+
+  <div class="card wide">
+    <h2>Peers — live link telemetry</h2>
+    <div class="body">
+      <table>
+        <thead>
+          <tr>
+            <th>Musician</th><th>Peer ID</th><th>State</th>
+            <th class="num">RTT</th><th class="num">One-way d<sub>j</sub></th>
+            <th class="num">Jitter</th><th class="num">Loss</th>
+            <th class="num">Injected</th><th class="num">Applied D−d<sub>j</sub></th>
+          </tr>
+        </thead>
+        <tbody id="peerRows"><tr><td colspan="9" style="color:var(--dim)">no peers yet</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Network impairment (netem substitute)</h2>
+    <div class="body">
+      <div id="impairList"><p class="hint" style="margin:0">No peers connected yet.</p></div>
+      <p class="hint">
+        Adds emulated delay to a link, at the receiving end. It delays that
+        peer's audio <em>and</em> its control traffic, so the measured RTT
+        genuinely rises — this is a real impairment, not a cosmetic slider.
+        Push one link to 150&nbsp;ms with compensation off to hear the ensemble
+        break apart, then switch compensation on and hear it re-lock.
+      </p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Audio</h2>
+    <div class="body">
+      <div class="row">
+        <div style="flex:1 1 100%">
+          <label for="fVol">Master volume</label>
+          <input type="range" id="fVol" min="0" max="100" value="85" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="btnMic">Enable microphone</button>
+        <button id="btnMonitor" disabled>Monitor mic</button>
+      </div>
+      <p class="hint">
+        The click track is the primary demo: a sharp transient makes timing
+        error far easier to hear than a sustained instrument would. The
+        microphone is optional — use headphones if you enable monitoring, or
+        the speakers will feed back.
+      </p>
+    </div>
+  </div>
+
+  <div class="card wide">
+    <h2>Model of distributed computations — happened-before</h2>
+    <div class="body">
+      <div class="row" style="gap:20px">
+        <div class="stat" style="flex:1 1 180px">
+          <span class="k">My Lamport clock</span><span class="v" id="sLamport">0</span>
+        </div>
+        <div class="stat" style="flex:2 1 240px">
+          <span class="k">My vector clock</span><span class="v" id="sVector" style="font-size:13px">—</span>
+        </div>
+        <div class="stat" style="flex:2 1 240px">
+          <span class="k">Last cross-process pair</span><span class="v" id="sRelation" style="font-size:13px">—</span>
+        </div>
+      </div>
+      <table style="margin-top:12px">
+        <thead>
+          <tr><th>#</th><th>Type</th><th>Event</th><th>Lamport</th><th>Vector clock</th></tr>
+        </thead>
+        <tbody id="eventRows"><tr><td colspan="5" style="color:var(--dim)">no events yet</td></tr></tbody>
+      </table>
+      <p class="hint">
+        A distributed computation is a <b>partial</b> order, not a sequence.
+        <b>a&nbsp;→&nbsp;b</b> holds only if they are in the same process, or
+        one is the send and the other the receive of the same message, or by
+        transitivity. Two notes played on different laptops where neither
+        heard the other are <b>concurrent</b> (<b>‖</b>) — asking which came
+        first is not a hard question, it is a meaningless one. The Lamport
+        scalar guarantees a&nbsp;→&nbsp;b ⟹ L(a)&lt;L(b) but never the
+        converse; the vector clock gives if-and-only-if, which is what makes
+        the ‖ above detectable at all.
+      </p>
+    </div>
+  </div>
+
+  <div class="card wide">
+    <h2>Names, identifiers &amp; addresses</h2>
+    <div class="body">
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Identifier</th><th>Address (live ICE pair)</th><th>Candidate</th></tr>
+        </thead>
+        <tbody id="nameRows"><tr><td colspan="4" style="color:var(--dim)">no peers yet</td></tr></tbody>
+      </table>
+      <p class="hint">
+        Three different things, routinely confused. A <b>name</b> is
+        human-readable, need not be unique and can change. An
+        <b>identifier</b> is unique, immutable, and never reused — it denotes
+        exactly one peer for that peer's whole lifetime. An <b>address</b> is
+        where the peer can currently be reached, and it can change underneath
+        a stable identifier: switch from Wi-Fi to Ethernet and the address
+        below changes while the identifier does not. This is why every message
+        in the system is routed by identifier and never by address.
+      </p>
+    </div>
+  </div>
+
+  <div class="card wide">
+    <h2>Event log</h2>
+    <div class="body"><div class="log" id="log"></div></div>
+  </div>
+
+</main>
+
+<script src="/vendor/mqtt.js"></script>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

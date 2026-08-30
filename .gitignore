@@ -1,0 +1,6 @@
+node_modules/
+.claude/
+npm-debug.log
+.env
+.env.*
+mosquitto/data/
