@@ -1,0 +1,23 @@
+# ---------------------------------------------------------------------------
+# Kubernetes deployment of the control plane.  (Unit 4 case study: Kubernetes)
+#
+#   docker build -t ensemble-server:1.0 .
+#   kubectl apply -f k8s/
+#   open http://localhost:30080
+#
+# Tested target: Docker Desktop's built-in Kubernetes, which shares the local
+# image store and exposes NodePorts on localhost. On kind or minikube, load
+# the image into the cluster first (kind load docker-image / minikube image
+# load) and use the node's IP instead of localhost.
+#
+# Compose (docker-compose.yml) and these manifests describe the same two
+# containers. The difference is who keeps them running: Compose starts them
+# once; Kubernetes continuously reconciles the cluster towards the declared
+# state -- restarting crashed containers, withholding traffic until probes
+# pass, rescheduling pods when a node dies. Declarative desired state plus a
+# control loop is the idea worth taking from Kubernetes.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ensemble

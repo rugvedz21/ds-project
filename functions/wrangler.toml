@@ -1,0 +1,12 @@
+# Cloudflare Workers deployment for the session-report function.
+#
+#   npx wrangler deploy --config functions/wrangler.toml
+#
+# Not run on this machine -- the local runtime (server/faas.js) is the tested
+# path. The function needs no bindings (no KV, no D1, no secrets): it is
+# stateless and receives everything it needs in the request body, which is
+# exactly why it can be moved between platforms without changes.
+name = "ensemble-session-report"
+main = "session-report.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]  # only for the Node-18 fallback import in web/ledger.js

@@ -1,0 +1,77 @@
+# ---------------------------------------------------------------------------
+# Session server: gRPC + JSON gateway + web client + ledger + FaaS runtime.
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: server
+  namespace: ensemble
+  labels: { app: server }
+spec:
+  # ONE replica, and not by oversight. The session registry and the ledger
+  # live in this process's memory. Two replicas would each hold a different
+  # subset of sessions, and a peer whose requests were load-balanced across
+  # them would join on one and heartbeat on the other -- and be evicted as
+  # dead. Scaling out needs the state moved somewhere shared (Redis, etcd, a
+  # database) or sticky routing by session id; see ARCHITECTURE.md 5.1 and 5.8.
+  replicas: 1
+  # Recreate, not RollingUpdate: a rolling update briefly runs old and new
+  # pods side by side, which is exactly the two-replica split described above.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: server }
+  template:
+    metadata:
+      labels: { app: server }
+    spec:
+      containers:
+        - name: server
+          image: ensemble-server:1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: grpc, containerPort: 50051 }
+          env:
+            - { name: EMBEDDED_BROKER, value: "0" }
+            - { name: MQTT_HOST, value: broker }         # Service name, resolved by cluster DNS
+            - { name: MQTT_TCP_PORT, value: "1883" }
+            - { name: MQTT_WS_PORT, value: "9001" }
+            # What browsers are told to dial: the broker's NodePort.
+            - { name: MQTT_WS_PUBLIC_PORT, value: "30901" }
+            - { name: DATA_DIR, value: /app/data }
+          # Readiness and liveness ask different questions -- see /healthz and
+          # /readyz in server/index.js. If the broker is down the server is
+          # not READY (send it no traffic) but it is still LIVE (restarting
+          # it would not fix the broker and would lose every session).
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 100m, memory: 96Mi }
+            limits: { cpu: "1", memory: 384Mi }
+          volumeMounts:
+            - { name: data, mountPath: /app/data }
+      volumes:
+        # Telemetry log for the MapReduce job. Scratch storage: lost with
+        # the pod, which is acceptable for analytics on a rehearsal.
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: server
+  namespace: ensemble
+spec:
+  type: NodePort
+  selector: { app: server }
+  ports:
+    - { name: http, port: 8080, targetPort: 8080, nodePort: 30080 }
+    - { name: grpc, port: 50051, targetPort: 50051, nodePort: 30051 }

@@ -1,0 +1,8 @@
+node_modules
+npm-debug.log
+.git
+.claude
+docs
+README.md
+mosquitto/data
+data

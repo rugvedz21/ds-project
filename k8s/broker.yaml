@@ -1,0 +1,84 @@
+# ---------------------------------------------------------------------------
+# MQTT broker: real Mosquitto, as in docker-compose.yml.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mosquitto-config
+  namespace: ensemble
+data:
+  # Same settings as mosquitto/mosquitto.docker.conf. Configuration lives in
+  # the cluster, not baked into the image, so it can change without a rebuild.
+  mosquitto.conf: |
+    listener 1883
+    protocol mqtt
+    listener 9001
+    protocol websockets
+    allow_anonymous true
+    persistence true
+    persistence_location /mosquitto/data/
+    autosave_interval 30
+    message_size_limit 65536
+    max_queued_messages 1000
+    log_type notice
+    log_type information
+    connection_messages true
+    log_timestamp true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: broker
+  namespace: ensemble
+  labels: { app: broker }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: broker }
+  template:
+    metadata:
+      labels: { app: broker }
+    spec:
+      containers:
+        - name: mosquitto
+          image: eclipse-mosquitto:2
+          ports:
+            - { name: mqtt, containerPort: 1883 }
+            - { name: mqtt-ws, containerPort: 9001 }
+          # A TCP probe is enough here: Mosquitto accepting connections IS the
+          # service being ready.
+          readinessProbe:
+            tcpSocket: { port: 1883 }
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 1883 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { cpu: 250m, memory: 128Mi }
+          volumeMounts:
+            - { name: config, mountPath: /mosquitto/config }
+            - { name: data, mountPath: /mosquitto/data }
+      volumes:
+        - name: config
+          configMap: { name: mosquitto-config }
+        # emptyDir lives as long as the pod. Retained messages survive a
+        # container restart but not a reschedule; a PersistentVolumeClaim
+        # would fix that, at the cost of tying the pod to storage.
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: broker            # the server reaches it by this NAME, via cluster DNS
+  namespace: ensemble
+spec:
+  type: NodePort
+  selector: { app: broker }
+  ports:
+    - { name: mqtt, port: 1883, targetPort: 1883 }
+    # Browsers connect to the broker directly, so the WebSocket listener must
+    # be reachable from outside the cluster.
+    - { name: mqtt-ws, port: 9001, targetPort: 9001, nodePort: 30901 }
